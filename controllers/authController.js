@@ -2,7 +2,8 @@ const catchAsyncError = require('../middlewares/catchAsyncError');
 const User = require('../models/userModel');
 const sendEmail = require('../utils/email');
 const ErrorHandler = require('../utils/errorHandler');
-const sendToken = require('../utils/jwt')
+const sendToken = require('../utils/jwt');
+const crypto = require('crypto') 
 
 exports.registerUser = catchAsyncError(async(req,res,next) => {
     const {name, email, password} = req.body;
@@ -62,7 +63,7 @@ exports.forgotPassword = catchAsyncError(async (req, res, next) => {
       BASE_URL = `${req.protocol}://${req.get("host")}`;
     }
     //Create reset url
-    const resetUrl = `${BASE_URL}/password/reset/${resetToken}`;
+    const resetUrl = `http://localhost:8000/password/reset/${resetToken}`;
   
     const message = `Your password reset url is as follows \n\n
       ${resetUrl} \n\n If you have not requested this email, then ignore it.`;
@@ -86,4 +87,59 @@ exports.forgotPassword = catchAsyncError(async (req, res, next) => {
     }
   });
   
+  //Reset Password -/api/v1/password/reset/:token
+exports.resetPassword = catchAsyncError(async (req, res, next) => {
+    const resetPasswordToken = crypto
+      .createHash("sha256")
+      .update(req.params.token)
+      .digest("hex");
   
+    const user = await User.findOne({
+      resetPasswordToken,
+      resetPasswordTokenExpire: {
+        $gt: Date.now(),
+      },
+    });
+  
+    if (!user) {
+      return next(new ErrorHandler("Password reset token is invalid or expired"));
+    }
+  
+    if (req.body.password !== req.body.confirmPassword) {
+      return next(new ErrorHandler("Password does not match"));
+    }
+  
+    user.password = req.body.password;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordTokenExpire = undefined;
+    await user.save({ validateBeforeSave: false });
+  
+    sendToken(user, 201, res);
+  });
+  
+  //Get User Profile - /api/v1/myprofile
+  exports.getUserProfile = catchAsyncError(async (req, res, next) => {
+    const user = await User.findById(req.user.id);
+    res.status(200).json({
+      success: true,
+      user,
+    });
+  });
+  
+  //Change Password - /api/v1/password/change
+  exports.changePassword = catchAsyncError(async (req, res, next) => {
+    const user = await User.findById(req.user.id).select("+password");
+  
+    //check old password
+    if (!(await user.isValidPassword(req.body.oldPassword))) {
+      return next(new ErrorHandler("Old password is incorrect", 401));
+    }
+  
+    //assigning new password
+    user.password = req.body.password;
+    await user.save();
+  
+    res.status(200).json({
+      success: true,
+    });
+  });
